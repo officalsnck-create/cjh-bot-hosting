@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-VERSION="8.0.1"
+VERSION="8.0.2"
 ROOT="${CJH_HOME:-$HOME/cjh-bots}"
 BASE_URL="https://raw.githubusercontent.com/officalsnck-create/cjh-bot-hosting/main"
 BOT_URL="${BASE_URL}/bot.py"
@@ -9,18 +9,41 @@ SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO="sudo"
 RESET=$'\033[0m'; CYAN=$'\033[38;5;51m'; PURPLE=$'\033[38;5;141m'; PINK=$'\033[38;5;205m'; GREEN=$'\033[38;5;82m'; YELLOW=$'\033[38;5;220m'; WHITE=$'\033[1;97m'; DIM=$'\033[38;5;245m'; RED=$'\033[38;5;203m'
 pause_menu(){ printf '\n%bPress ENTER to continue%b ' "$DIM" "$RESET"; read -r _; }
 header(){ printf '\033[2J\033[H'; printf '%b╭──────────────────────────────────────────────────────────────────────────────╮%b\n' "$PURPLE" "$RESET"; printf '%b│%b  %bCJH BOT HOSTING%b  %bv%s • VPS CONTROL CENTER%b\n' "$PURPLE" "$RESET" "$WHITE" "$RESET" "$DIM" "$VERSION" "$RESET"; printf '%b╰──────────────────────────────────────────────────────────────────────────────╯%b\n\n' "$PURPLE" "$RESET"; }
-need(){ command -v "$1" >/dev/null 2>&1 && return 0; $SUDO apt-get update -y >/dev/null && $SUDO apt-get install -y "$2" >/dev/null; }
+apt_install(){
+  local packages=("$@");
+  if ! $SUDO apt-get update -y >/tmp/cjh-apt-update.log 2>&1; then
+    printf '%bAPT update returned a warning/error; continuing with the existing package indexes.%b\n' "$YELLOW" "$RESET"
+  fi
+  $SUDO apt-get install -y "${packages[@]}" >/tmp/cjh-apt-install.log 2>&1 || {
+    printf '%bAPT could not install: %s%b\n' "$RED" "${packages[*]}" "$RESET";
+    tail -20 /tmp/cjh-apt-install.log 2>/dev/null || true
+    return 1
+  }
+}
+need(){ command -v "$1" >/dev/null 2>&1 && return 0; apt_install "$2"; command -v "$1" >/dev/null 2>&1; }
 setup_runtime(){
- need curl curl || return 1; need ca-certificates ca-certificates || return 1; need python3 python3 || return 1; need python3-venv python3-venv || return 1; need python3-pip python3-pip || return 1; need lxc lxc || return 1
- if ! command -v node >/dev/null 2>&1; then curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/dev/null && $SUDO apt-get install -y nodejs >/dev/null; fi
- if ! command -v npm >/dev/null 2>&1; then $SUDO apt-get install -y npm >/dev/null; fi
- if ! command -v pm2 >/dev/null 2>&1; then $SUDO npm install -g pm2 >/dev/null; fi
+ need curl curl || return 1
+ need ca-certificates ca-certificates || return 1
+ need python3 python3 || return 1
+ apt_install python3-venv python3-pip python3-full || return 1
+ need lxc lxc || return 1
+ if ! command -v node >/dev/null 2>&1; then curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/dev/null && apt_install nodejs || return 1; fi
+ if ! command -v npm >/dev/null 2>&1; then apt_install npm || return 1; fi
+ if ! command -v pm2 >/dev/null 2>&1; then $SUDO npm install -g pm2 >/dev/null 2>&1 || return 1; fi
  command -v pm2 >/dev/null 2>&1 || return 1
  mkdir -p "$ROOT"; chmod 700 "$ROOT"
 }
+create_python_env(){
+  local dir="$1"; rm -rf "$dir/venv"
+  if python3 -m venv "$dir/venv" >/tmp/cjh-venv.log 2>&1 && "$dir/venv/bin/python" -m pip --version >/dev/null 2>&1; then return 0; fi
+  printf '%bSystem ensurepip failed; using a clean venv + official pip bootstrap.%b\n' "$YELLOW" "$RESET"
+  rm -rf "$dir/venv"; python3 -m venv --without-pip "$dir/venv" >/tmp/cjh-venv.log 2>&1 || { cat /tmp/cjh-venv.log 2>/dev/null || true; return 1; }
+  curl -fsSL --retry 3 --retry-delay 1 https://bootstrap.pypa.io/get-pip.py -o "$dir/get-pip.py" || return 1
+  "$dir/venv/bin/python" "$dir/get-pip.py" --disable-pip-version-check >/tmp/cjh-pip.log 2>&1 || { tail -30 /tmp/cjh-pip.log 2>/dev/null || true; return 1; }
+  rm -f "$dir/get-pip.py"; "$dir/venv/bin/python" -m pip --version >/dev/null 2>&1
+}
 detect_host(){
- local detected=""
- detected="$(curl -4 -fsS --connect-timeout 5 https://api.ipify.org 2>/dev/null || true)"
+ local detected=""; detected="$(curl -4 -fsS --connect-timeout 5 https://api.ipify.org 2>/dev/null || true)"
  if [[ ! "$detected" =~ ^[0-9.]+$ ]]; then detected="$(curl -4 -fsS --connect-timeout 5 https://ifconfig.me 2>/dev/null || true)"; fi
  if [[ ! "$detected" =~ ^[0-9.]+$ ]]; then detected="$(hostname -I 2>/dev/null | awk '{print $1}')"; fi
  printf '%s' "$detected"
@@ -54,16 +77,17 @@ DEPLOY_CPU=3
 DEPLOY_DISK=80
 DEPLOY_ROLE_ID=$deploy_role
 VPS_DEPLOY_LIMIT=2
-BOT_VERSION=8.0.1-PRO
+BOT_VERSION=8.0.2-PRO
 BOT_DEVELOPER=root_dora
 EOF
- chmod 600 "$dir/.env"; python3 -m venv "$dir/venv"
- if ! "$dir/venv/bin/pip" install --upgrade pip >/dev/null 2>&1 || ! "$dir/venv/bin/pip" install -r "$dir/requirements.txt" >/dev/null 2>&1; then rm -rf "$dir"; printf '%bPython dependencies failed; rolled back.%b\n' "$RED" "$RESET"; pause_menu; return; fi
+ chmod 600 "$dir/.env"
+ if ! create_python_env "$dir"; then rm -rf "$dir"; printf '%bPython virtual environment could not be created.%b\n' "$RED" "$RESET"; pause_menu; return; fi
+ if ! "$dir/venv/bin/python" -m pip install --upgrade pip --disable-pip-version-check >/dev/null 2>&1 || ! "$dir/venv/bin/python" -m pip install --disable-pip-version-check -r "$dir/requirements.txt" >/dev/null 2>&1; then rm -rf "$dir"; printf '%bPython dependencies failed; rolled back.%b\n' "$RED" "$RESET"; pause_menu; return; fi
  pm2 delete "$name" >/dev/null 2>&1 || true; pm2 start "$dir/venv/bin/python" --name "$name" --cwd "$dir" --interpreter none -- "$dir/bot.py"; pm2 save >/dev/null 2>&1 || true
  printf '%b✓ REAL VPS bot installed and started.%b\n' "$GREEN" "$RESET"; printf '%bPublic host:%b %s\n' "$DIM" "$RESET" "$host_ip"; printf '%bBot directory:%b %s\n' "$DIM" "$RESET" "$dir"; pause_menu
 }
 manage(){ local action="$1"; header; printf '%b%s BOT%b\n\n' "$CYAN" "$action" "$RESET"; choose_bot || { pause_menu; return; }; case "$action" in START) pm2 start "$SELECTED";; STOP) pm2 stop "$SELECTED";; RESTART) pm2 restart "$SELECTED";; LOGS) pm2 logs "$SELECTED" --lines 150 --nostream;; esac; pm2 save >/dev/null 2>&1 || true; pause_menu; }
-update_bot(){ header; printf '%bUPDATE BOT%b\n\n' "$CYAN" "$RESET"; choose_bot || { pause_menu; return; }; local dir="$ROOT/$SELECTED"; pm2 stop "$SELECTED" >/dev/null 2>&1 || true; if curl -fL --retry 3 --retry-delay 1 "$BOT_URL" -o "$dir/bot.py" && python3 -m py_compile "$dir/bot.py" && "$dir/venv/bin/pip" install -r "$dir/requirements.txt" >/dev/null 2>&1; then pm2 restart "$SELECTED"; pm2 save >/dev/null 2>&1 || true; printf '%b✓ Bot updated.%b\n' "$GREEN" "$RESET"; else printf '%bUpdate validation failed. Existing files were not deleted.%b\n' "$RED" "$RESET"; fi; pause_menu; }
+update_bot(){ header; printf '%bUPDATE BOT%b\n\n' "$CYAN" "$RESET"; choose_bot || { pause_menu; return; }; local dir="$ROOT/$SELECTED"; pm2 stop "$SELECTED" >/dev/null 2>&1 || true; if curl -fL --retry 3 --retry-delay 1 "$BOT_URL" -o "$dir/bot.py" && python3 -m py_compile "$dir/bot.py" && "$dir/venv/bin/python" -m pip install -r "$dir/requirements.txt" >/dev/null 2>&1; then pm2 restart "$SELECTED"; pm2 save >/dev/null 2>&1 || true; printf '%b✓ Bot updated.%b\n' "$GREEN" "$RESET"; else printf '%bUpdate validation failed. Existing files were not deleted.%b\n' "$RED" "$RESET"; fi; pause_menu; }
 remove_bot(){ header; printf '%bREMOVE BOT%b\n\n' "$RED" "$RESET"; choose_bot || { pause_menu; return; }; printf '%bType REMOVE to permanently delete %s:%b ' "$YELLOW" "$SELECTED" "$RESET"; read -r confirm; [ "$confirm" = REMOVE ] || { printf '%bCancelled.%b\n' "$DIM" "$RESET"; pause_menu; return; }; pm2 delete "$SELECTED" >/dev/null 2>&1 || true; rm -rf -- "$ROOT/$SELECTED"; pm2 save >/dev/null 2>&1 || true; printf '%b✓ Bot removed.%b\n' "$GREEN" "$RESET"; pause_menu; }
 status(){ header; printf '%bRUNTIME%b\nPython: %s\nLXC: %s\nPM2: %s\nPublic IP: %s\n\n' "$CYAN" "$RESET" "$(python3 --version 2>/dev/null || echo unavailable)" "$(lxc version 2>/dev/null | head -1 || echo unavailable)" "$(pm2 -v 2>/dev/null || echo unavailable)" "$(detect_host || echo unavailable)"; pm2 list; pause_menu; }
 menu(){ header; printf '%b  01%b  Install / create VPS bot\n' "$CYAN" "$RESET"; printf '%b  02%b  Start bot\n' "$GREEN" "$RESET"; printf '%b  03%b  Stop bot\n' "$YELLOW" "$RESET"; printf '%b  04%b  Restart bot\n' "$PURPLE" "$RESET"; printf '%b  05%b  Live logs\n' "$PINK" "$RESET"; printf '%b  06%b  Update bot\n' "$CYAN" "$RESET"; printf '%b  07%b  Remove bot\n' "$RED" "$RESET"; printf '%b  08%b  System / LXC / PM2 status\n' "$WHITE" "$RESET"; printf '%b  Q %b Quit\n\n' "$DIM" "$RESET"; printf '%bSelect › %b' "$WHITE" "$CYAN"; read -r choice; case "$choice" in 1|01) create_bot;;2|02) manage START;;3|03) manage STOP;;4|04) manage RESTART;;5|05) manage LOGS;;6|06) update_bot;;7|07) remove_bot;;8|08) status;;q|Q) exit 0;;*) printf '%bInvalid option.%b\n' "$YELLOW" "$RESET"; sleep 1;;esac; }
