@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-VERSION="8.0.2"
+VERSION="8.0.3"
 ROOT="${CJH_HOME:-$HOME/cjh-bots}"
 BASE_URL="https://raw.githubusercontent.com/officalsnck-create/cjh-bot-hosting/main"
 BOT_URL="${BASE_URL}/bot.py"
@@ -9,45 +9,31 @@ SUDO=""; [ "$(id -u)" -eq 0 ] || SUDO="sudo"
 RESET=$'\033[0m'; CYAN=$'\033[38;5;51m'; PURPLE=$'\033[38;5;141m'; PINK=$'\033[38;5;205m'; GREEN=$'\033[38;5;82m'; YELLOW=$'\033[38;5;220m'; WHITE=$'\033[1;97m'; DIM=$'\033[38;5;245m'; RED=$'\033[38;5;203m'
 pause_menu(){ printf '\n%bPress ENTER to continue%b ' "$DIM" "$RESET"; read -r _; }
 header(){ printf '\033[2J\033[H'; printf '%b╭──────────────────────────────────────────────────────────────────────────────╮%b\n' "$PURPLE" "$RESET"; printf '%b│%b  %bCJH BOT HOSTING%b  %bv%s • VPS CONTROL CENTER%b\n' "$PURPLE" "$RESET" "$WHITE" "$RESET" "$DIM" "$VERSION" "$RESET"; printf '%b╰──────────────────────────────────────────────────────────────────────────────╯%b\n\n' "$PURPLE" "$RESET"; }
-apt_install(){
-  local packages=("$@");
-  if ! $SUDO apt-get update -y >/tmp/cjh-apt-update.log 2>&1; then
-    printf '%bAPT update returned a warning/error; continuing with the existing package indexes.%b\n' "$YELLOW" "$RESET"
-  fi
-  $SUDO apt-get install -y "${packages[@]}" >/tmp/cjh-apt-install.log 2>&1 || {
-    printf '%bAPT could not install: %s%b\n' "$RED" "${packages[*]}" "$RESET";
-    tail -20 /tmp/cjh-apt-install.log 2>/dev/null || true
-    return 1
-  }
-}
+apt_install(){ local packages=("$@"); if ! $SUDO apt-get update -y >/tmp/cjh-apt-update.log 2>&1; then printf '%bAPT update returned warnings; continuing with existing indexes.%b\n' "$YELLOW" "$RESET"; fi; $SUDO apt-get install -y "${packages[@]}" >/tmp/cjh-apt-install.log 2>&1 || { printf '%bAPT could not install: %s%b\n' "$RED" "${packages[*]}" "$RESET"; tail -20 /tmp/cjh-apt-install.log 2>/dev/null || true; return 1; }; }
 need(){ command -v "$1" >/dev/null 2>&1 && return 0; apt_install "$2"; command -v "$1" >/dev/null 2>&1; }
 setup_runtime(){
- need curl curl || return 1
- need ca-certificates ca-certificates || return 1
- need python3 python3 || return 1
+ need curl curl || return 1; need ca-certificates ca-certificates || return 1; need python3 python3 || return 1
  apt_install python3-venv python3-pip python3-full || return 1
  need lxc lxc || return 1
  if ! command -v node >/dev/null 2>&1; then curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/dev/null && apt_install nodejs || return 1; fi
  if ! command -v npm >/dev/null 2>&1; then apt_install npm || return 1; fi
  if ! command -v pm2 >/dev/null 2>&1; then $SUDO npm install -g pm2 >/dev/null 2>&1 || return 1; fi
- command -v pm2 >/dev/null 2>&1 || return 1
- mkdir -p "$ROOT"; chmod 700 "$ROOT"
+ command -v pm2 >/dev/null 2>&1 || return 1; mkdir -p "$ROOT"; chmod 700 "$ROOT";
 }
 create_python_env(){
-  local dir="$1"; rm -rf "$dir/venv"
-  if python3 -m venv "$dir/venv" >/tmp/cjh-venv.log 2>&1 && "$dir/venv/bin/python" -m pip --version >/dev/null 2>&1; then return 0; fi
-  printf '%bSystem ensurepip failed; using a clean venv + official pip bootstrap.%b\n' "$YELLOW" "$RESET"
-  rm -rf "$dir/venv"; python3 -m venv --without-pip "$dir/venv" >/tmp/cjh-venv.log 2>&1 || { cat /tmp/cjh-venv.log 2>/dev/null || true; return 1; }
+  local dir="$1"; rm -rf "$dir/venv"; mkdir -p "$dir"
+  # IMPORTANT: never invoke `python3 -m venv` without --without-pip.
+  # Debian/Ubuntu builds can fail inside ensurepip even when python3-venv is installed.
+  if ! python3 -m venv --without-pip "$dir/venv" >/tmp/cjh-venv.log 2>&1; then
+    printf '%bPython venv creation failed:%b\n' "$RED" "$RESET"; cat /tmp/cjh-venv.log 2>/dev/null || true; return 1
+  fi
   curl -fsSL --retry 3 --retry-delay 1 https://bootstrap.pypa.io/get-pip.py -o "$dir/get-pip.py" || return 1
-  "$dir/venv/bin/python" "$dir/get-pip.py" --disable-pip-version-check >/tmp/cjh-pip.log 2>&1 || { tail -30 /tmp/cjh-pip.log 2>/dev/null || true; return 1; }
+  if ! "$dir/venv/bin/python" "$dir/get-pip.py" --disable-pip-version-check >/tmp/cjh-pip.log 2>&1; then
+    printf '%bPip bootstrap failed:%b\n' "$RED" "$RESET"; tail -30 /tmp/cjh-pip.log 2>/dev/null || true; return 1
+  fi
   rm -f "$dir/get-pip.py"; "$dir/venv/bin/python" -m pip --version >/dev/null 2>&1
 }
-detect_host(){
- local detected=""; detected="$(curl -4 -fsS --connect-timeout 5 https://api.ipify.org 2>/dev/null || true)"
- if [[ ! "$detected" =~ ^[0-9.]+$ ]]; then detected="$(curl -4 -fsS --connect-timeout 5 https://ifconfig.me 2>/dev/null || true)"; fi
- if [[ ! "$detected" =~ ^[0-9.]+$ ]]; then detected="$(hostname -I 2>/dev/null | awk '{print $1}')"; fi
- printf '%s' "$detected"
-}
+detect_host(){ local detected=""; detected="$(curl -4 -fsS --connect-timeout 5 https://api.ipify.org 2>/dev/null || true)"; if [[ ! "$detected" =~ ^[0-9.]+$ ]]; then detected="$(curl -4 -fsS --connect-timeout 5 https://ifconfig.me 2>/dev/null || true)"; fi; if [[ ! "$detected" =~ ^[0-9.]+$ ]]; then detected="$(hostname -I 2>/dev/null | awk '{print $1}')"; fi; printf '%s' "$detected"; }
 list_bots(){ mapfile -t bots < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | sort); }
 choose_bot(){ list_bots; [ "${#bots[@]}" -gt 0 ] || { printf '%bNo bots installed.%b\n' "$YELLOW" "$RESET"; return 1; }; local i=1 bot; for bot in "${bots[@]}"; do printf '  %b[%02d]%b %s\n' "$CYAN" "$i" "$RESET" "$bot"; i=$((i+1)); done; printf '\n%bSelect bot:%b ' "$WHITE" "$RESET"; read -r n; [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le "${#bots[@]}" ] || return 1; SELECTED="${bots[$((n-1))]}"; }
 slug(){ printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g;s/^-+//;s/-+$//'; }
@@ -77,7 +63,7 @@ DEPLOY_CPU=3
 DEPLOY_DISK=80
 DEPLOY_ROLE_ID=$deploy_role
 VPS_DEPLOY_LIMIT=2
-BOT_VERSION=8.0.2-PRO
+BOT_VERSION=8.0.3-PRO
 BOT_DEVELOPER=root_dora
 EOF
  chmod 600 "$dir/.env"
