@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-VERSION="8.0.6"
+VERSION="8.0.7"
 ROOT="${CJH_HOME:-$HOME/cjh-bots}"
 BASE_URL="https://raw.githubusercontent.com/officalsnck-create/cjh-bot-hosting/main"
 BOT_URL="$BASE_URL/bot.py"
@@ -58,7 +58,7 @@ apt_install(){
   local packages=("$@")
   apt_update || return 1
   log "Installing: ${packages[*]}"
-  if ! $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}" >/tmp/cjh-apt-install.log 2>&1; then
+  if ! env DEBIAN_FRONTEND=noninteractive $SUDO apt-get install -y "${packages[@]}" >/tmp/cjh-apt-install.log 2>&1; then
     fail "APT failed while installing: ${packages[*]}"
     tail -50 /tmp/cjh-apt-install.log || true
     return 1
