@@ -1,171 +1,175 @@
 # 🤖 CJH Bot Hosting
 
-A lightweight **Discord Bot Hosting & Management Toolkit** for Ubuntu/Debian VPS servers. CJH provides a simple interactive terminal menu for creating, starting, stopping, updating, and removing Discord bot instances with PM2.
+A production-focused Discord bot hosting and management toolkit for Ubuntu/Debian VPS servers.
 
-> **Project:** `officalsnck-create/cjh-bot-hosting`  
-> **Main installer:** `setup.sh`
+CJH uses a **single installer**, PM2 for process supervision, and a real Discord.js runtime. The installer validates the bot source before starting it and provides a complete bot lifecycle menu.
 
----
+## ✨ What is included
 
-## ✨ Features
+### VPS / hosting manager
 
-- 🚀 One-command installation
-- 🧭 Interactive terminal management menu
-- 🤖 Create and configure a Discord bot
-- 🟢 Start / 🔴 stop bot processes
-- 🗑️ Remove bot installations
-- 🔄 Update the local project when used from a Git repository
-- ⚡ PM2 process management
-- 📦 Automatic Node.js installation when Node.js is missing
-- 🔊 Discord voice-channel join support
-- 🛡️ Basic message moderation / timeout protection
-- 📡 Discord slash commands
-- 💾 PM2 process persistence across reboots
-- 🐧 Designed for Ubuntu/Debian VPS environments
+- 🚀 One-command installer
+- 🎨 Premium terminal UI with purple/cyan/pink ANSI glass-style presentation
+- 🤖 Deploy a real Discord bot
+- 🟢 Start
+- 🔴 Stop
+- 🔄 Restart
+- 📜 Live logs
+- ⬆️ Update an installed bot from the current repository bot source
+- 🗑️ Safe remove with explicit confirmation
+- 📊 Node.js / npm / PM2 status
+- 💾 PM2 persistence
+- 🧹 Failed installs roll back instead of leaving a half-created bot
+- 🔐 `.env` is created with restrictive permissions
+- ✅ Node.js syntax validation before a bot is started
 
----
+## ⚡ One-command installer
 
-## ⚡ One-Command Installer
-
-Run this on your Ubuntu/Debian VPS:
+On Ubuntu/Debian:
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/officalsnck-create/cjh-bot-hosting/main/setup.sh)
 ```
 
-The installer launches the CJH menu automatically.
+The installer is intentionally consolidated: **`setup.sh` is the only installer entrypoint.**
 
-### Safer alternative
-
-If you prefer to inspect the installer before executing it:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/officalsnck-create/cjh-bot-hosting/main/setup.sh -o setup.sh
-less setup.sh
-chmod +x setup.sh
-./setup.sh
-```
-
----
-
-## 🧭 Management Menu
-
-After starting `setup.sh`, you will get an interactive menu similar to:
+## 🧭 Management menu
 
 ```text
-==========================================
-               CJH BOT
-==========================================
-1. CREATE Bot (Setup & Run)
-2. UNINSTALL Bot (Stop & Delete)
-3. UPDATE Bot (Pull latest from GitHub)
-4. START Bot (Select from list)
-5. STOP Bot (Select from list)
-6. VPS Deploy Bot (Coming Soon)
-7. Exit
-==========================================
+╭──────────────────────────────────────────────────────────────────────────────╮
+│  CJH BOT HOSTING  v7.0.0 • REAL DISCORD CONTROL                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+  01  Deploy new bot
+  02  Start bot
+  03  Stop bot
+  04  Restart bot
+  05  Live logs
+  06  Update bot
+  07  Remove bot
+  08  System / PM2 status
+  Q   Quit
 ```
 
-Choose an option by entering its number.
+There are no fake/demo management actions in the menu: each lifecycle action maps to the local PM2 process and filesystem.
 
----
+## 🤖 Real Discord features
 
-## 🚀 Create a Bot
+The generated bot uses the Discord API and Discord.js v14.
 
-Select:
+### Information
+
+- `/help`
+- `/ping`
+- `/security`
+- `/server`
+- `/userinfo`
+- `/avatar`
+- `/membercount`
+
+### Moderation
+
+- `/clear`
+- `/kick`
+- `/ban`
+- `/unban`
+- `/timeout`
+- `/untimeout`
+- `/warn`
+- `/warnings`
+- `/clearwarnings`
+
+Moderation actions check Discord permissions and role hierarchy before performing the action.
+
+### Channel management
+
+- `/lock`
+- `/unlock`
+- `/slowmode`
+
+### Community / utility
+
+- `/announce`
+- `/say`
+- `/poll`
+- `/nick`
+
+### Server configuration
+
+- `/setlogs` — persistent moderation logging
+- `/setwelcome` — persistent welcome channel
+- `/setstatus` — change bot activity
+
+### Automatic behavior
+
+- 👋 Real welcome messages
+- 🛡️ Moderation log embeds
+- 💾 Persistent warning storage in `data.json`
+- 📊 Yes/no reaction polls
+- 🧩 Slash-command registration through Discord's API
+
+## 💎 Bot message design
+
+CJH responses use Discord embeds instead of plain, unfinished-looking messages. Successful actions use a clean confirmation card, failures use a separate error card, and moderation logs use their own embed style.
+
+Every CJH embed carries the footer:
+
+> **Made by root_dora • CJH Bot Hosting**
+
+## 🔐 Discord setup
+
+Create a bot application in Discord's official developer tools and keep the token private.
+
+The bot requires the Discord permissions appropriate to the commands you enable, such as:
+
+- Manage Messages for `/clear`
+- Kick Members for `/kick`
+- Ban Members for `/ban` and `/unban`
+- Moderate Members for `/timeout`, `/untimeout`, `/warn`, and warning management
+- Manage Channels for `/lock`, `/unlock`, and `/slowmode`
+- Manage Server for configuration and announcements
+- Manage Nicknames for `/nick`
+
+The welcome system uses the Guild Members gateway intent. Enable the corresponding privileged intent in the Discord Developer Portal if your application requires it.
+
+**Never publish your bot token.** If it is exposed, rotate it immediately.
+
+## 📁 Runtime layout
 
 ```text
-1. CREATE Bot
+~/cjh-bots/
+└── my-bot/
+    ├── .env
+    ├── bot.js
+    ├── package.json
+    ├── package-lock.json
+    └── data.json
 ```
 
-CJH will:
-
-1. Check for Node.js.
-2. Install Node.js if required.
-3. Ask for the Discord bot token.
-4. Ask for the Discord Application / Client ID.
-5. Ask for the administrator Discord user ID.
-6. Ask for a bot folder/process name.
-7. Create the bot files.
-8. Install npm dependencies.
-9. Install PM2 if necessary.
-10. Start the bot with PM2.
-11. Save the PM2 process list.
-
-The bot can then continue running after you disconnect from SSH.
-
----
+The `.env` contains the bot credentials and is created with restrictive permissions. `data.json` stores per-server configuration and warnings.
 
 ## 🛠️ Requirements
 
-Recommended environment:
-
-- Ubuntu 22.04 / 24.04 or compatible Debian-based Linux
-- `curl`
-- `sudo` access
+- Ubuntu/Debian VPS
 - Internet connection
-- A Discord application/bot created through Discord's official developer tools
+- `sudo` access when Node.js/PM2 must be installed
+- A Discord application and bot token
 
-Node.js and PM2 are installed automatically by the current installer when they are not already available.
+The installer installs Node.js 20, npm, PM2, curl, and CA certificates when required.
 
----
+## 🧪 Validation and recovery
 
-## 🤖 Included Bot Commands
+Before the bot is started, CJH runs:
 
-The generated bot currently includes:
-
-| Command | Purpose |
-|---|---|
-| `/ping` | Check bot latency |
-| `/security` | Show the basic security/moderation status |
-| `/joinvc` | Join the invoking user's current voice channel |
-| `!ping` | Prefix-based latency check |
-
-The generated bot also includes basic prohibited-word detection and automatic timeout handling.
-
----
-
-## 🔐 Discord Configuration
-
-When creating the Discord application, make sure the bot has the permissions and gateway intents required by the features you enable.
-
-For the current generated bot, message-based moderation uses message content and guild/member-related events. Voice functionality also requires the appropriate voice permissions in the target server/channel.
-
-**Never publish your bot token.** Treat it like a password. If a token is accidentally exposed, rotate it immediately through Discord's developer tools.
-
----
-
-## 📁 Project Structure
-
-```text
-cjh-bot-hosting/
-├── README.md
-└── setup.sh
+```bash
+node --check bot.js
 ```
 
-`setup.sh` is the interactive installer and management entry point. It generates the bot runtime files inside the selected bot directory.
+The installer also installs dependencies before launching PM2. If source download, syntax validation, or dependency installation fails during a new deployment, the incomplete bot directory is removed.
 
----
+For an installed bot, use **Update bot** to download the current repository bot source, validate it, install dependencies, and restart the bot.
 
-## 🔄 Updating
-
-If you are running the project from a cloned Git repository, choose:
-
-```text
-3. UPDATE Bot
-```
-
-The updater attempts to pull the latest `main` branch changes.
-
-If you originally executed the remote one-command installer without cloning the repository, download the latest `setup.sh` again when you want to refresh the installer.
-
----
-
-## 🟢 Process Management
-
-CJH uses **PM2** to keep bot processes running.
-
-Useful commands:
+## 📜 PM2 commands
 
 ```bash
 pm2 list
@@ -174,124 +178,31 @@ pm2 save
 pm2 resurrect
 ```
 
-You can also manage bots directly from the CJH menu.
+CJH saves the process list after lifecycle operations so bots can be restored after a reboot when PM2 startup has been configured on the VPS.
 
----
+## 🔒 Security notes
 
-## 🧹 Uninstall a Bot
+- Never commit tokens or `.env` files.
+- Use least-privilege Discord permissions.
+- Keep the VPS and Node.js packages updated.
+- Do not run untrusted bot code.
+- Review the installer before running it on a production server if your environment has strict change-control requirements.
 
-Choose:
+## 🧩 Project files
 
 ```text
-2. UNINSTALL Bot
+cjh-bot-hosting/
+├── README.md
+├── setup.sh
+└── bot-template.js
 ```
 
-CJH displays the active PM2 processes and lets you select the bot process to remove.
-
-> Review the bot name carefully before confirming removal because the bot directory is deleted by the current uninstall routine.
-
----
-
-## 🔒 Security Notes
-
-CJH is intended for legitimate bot hosting and server administration.
-
-- Do not commit Discord tokens or other secrets to Git.
-- Use least-privilege Discord permissions where possible.
-- Keep Ubuntu/Debian and Node.js packages updated.
-- Use a non-root account for routine administration when practical.
-- Restrict SSH access and use key-based authentication where possible.
-- Review `setup.sh` before running it on a production server.
-
----
-
-## 🧪 Troubleshooting
-
-### Check whether Node.js is installed
-
-```bash
-node --version
-npm --version
-```
-
-### Check PM2
-
-```bash
-pm2 --version
-pm2 list
-```
-
-### View bot logs
-
-```bash
-pm2 logs
-```
-
-### Restart a bot
-
-```bash
-pm2 restart <bot-name>
-```
-
-### Check whether the bot process is online
-
-```bash
-pm2 status
-```
-
----
-
-## 🐧 VPS Quick Start
-
-For a fresh Ubuntu/Debian VPS:
-
-```bash
-sudo apt update && sudo apt install -y curl
-bash <(curl -fsSL https://raw.githubusercontent.com/officalsnck-create/cjh-bot-hosting/main/setup.sh)
-```
-
-Then select **CREATE Bot** from the menu and follow the prompts.
-
----
-
-## 🗺️ Roadmap
-
-Planned improvements can include:
-
-- 🌐 Web-based management panel
-- 🖥️ Multi-VPS/node management
-- 📊 CPU/RAM/storage monitoring
-- 🗂️ Browser-based bot file manager
-- 🔐 Encrypted secret storage
-- 🔁 Automated backup and restore
-- 🧩 Runtime templates for Node.js, Python, Java and more
-- ☁️ Remote deployment workflow
-- 🟢 Better health checks and automatic recovery
-- 📦 Release-based installer versions
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome.
-
-1. Fork the repository.
-2. Create a feature branch.
-3. Make and test your changes.
-4. Open a pull request with a clear description of the change.
-
-Please avoid committing secrets, tokens, private keys, or generated credentials.
-
----
+`setup.sh` is the single installer/manager. `bot-template.js` is the real Discord bot template downloaded during deployment.
 
 ## 📜 License
 
-See the repository for the project's license information.
+See the repository license information for the applicable terms.
 
 ---
 
-## ⭐ Support the Project
-
-If CJH Bot Hosting is useful to you, consider starring the repository and sharing improvements through pull requests.
-
-**CJH Bot Hosting — simple bot management from your VPS terminal.**
+**CJH Bot Hosting — real Discord automation, clean VPS management, and a better terminal experience.**
