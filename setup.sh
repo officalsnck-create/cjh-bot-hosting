@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-VERSION="8.0.4"
+VERSION="8.0.5"
 ROOT="${CJH_HOME:-$HOME/cjh-bots}"
 BASE_URL="https://raw.githubusercontent.com/officalsnck-create/cjh-bot-hosting/main"
 BOT_URL="${BASE_URL}/bot.py"
@@ -10,24 +10,35 @@ RESET=$'\033[0m'; CYAN=$'\033[38;5;51m'; PURPLE=$'\033[38;5;141m'; PINK=$'\033[3
 pause_menu(){ printf '\n%bPress ENTER to continue%b ' "$DIM" "$RESET"; read -r _; }
 header(){ printf '\033[2J\033[H'; printf '%b╭──────────────────────────────────────────────────────────────────────────────╮%b\n' "$PURPLE" "$RESET"; printf '%b│%b  %bCJH BOT HOSTING%b  %bv%s • VPS CONTROL CENTER%b\n' "$PURPLE" "$RESET" "$WHITE" "$RESET" "$DIM" "$VERSION" "$RESET"; printf '%b╰──────────────────────────────────────────────────────────────────────────────╯%b\n\n' "$PURPLE" "$RESET"; }
 apt_install(){
-  local packages=("$@"); printf '%b• Installing:%b %s\n' "$CYAN" "$RESET" "${packages[*]}"
-  if ! $SUDO apt-get update >/tmp/cjh-apt-update.log 2>&1; then printf '%b• APT update reported warnings; continuing.%b\n' "$YELLOW" "$RESET"; fi
+  local packages=("$@"); printf '%b• Installing missing package(s):%b %s\n' "$CYAN" "$RESET" "${packages[*]}"
+  if ! $SUDO apt-get update >/tmp/cjh-apt-update.log 2>&1; then printf '%b• APT update reported warnings; trying package installation anyway.%b\n' "$YELLOW" "$RESET"; fi
   if ! $SUDO apt-get install -y "${packages[@]}" >/tmp/cjh-apt-install.log 2>&1; then
-    printf '%b✗ APT could not install:%b %s\n' "$RED" "$RESET" "${packages[*]}"; tail -20 /tmp/cjh-apt-install.log 2>/dev/null || true; return 1
+    printf '%b✗ APT could not install:%b %s\n' "$RED" "$RESET" "${packages[*]}"; tail -30 /tmp/cjh-apt-install.log 2>/dev/null || true; return 1
   fi
   printf '%b✓ Installed:%b %s\n' "$GREEN" "$RESET" "${packages[*]}"
 }
-need(){ command -v "$1" >/dev/null 2>&1 && return 0; apt_install "$2"; command -v "$1" >/dev/null 2>&1; }
+command_ready(){ command -v "$1" >/dev/null 2>&1; }
+package_ready(){ dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'; }
+ensure_command(){ local cmd="$1" pkg="$2"; command_ready "$cmd" && return 0; apt_install "$pkg"; command_ready "$cmd"; }
+ensure_package(){ local pkg="$1"; package_ready "$pkg" && return 0; apt_install "$pkg"; package_ready "$pkg"; }
 setup_runtime(){
   printf '%b[1/4]%b Checking system runtime...\n' "$CYAN" "$RESET"
-  need curl curl || return 1; need ca-certificates ca-certificates || return 1; need python3 python3 || return 1
-  printf '%b[2/4]%b Checking Python packages...\n' "$CYAN" "$RESET"; apt_install python3-venv python3-pip python3-full || return 1
-  printf '%b[3/4]%b Checking LXC...\n' "$CYAN" "$RESET"; need lxc lxc || return 1
+  ensure_command curl curl || return 1
+  # ca-certificates is a package, not a command. The old installer incorrectly used command -v ca-certificates.
+  ensure_package ca-certificates || return 1
+  ensure_command python3 python3 || return 1
+  printf '%b[2/4]%b Checking Python packages...\n' "$CYAN" "$RESET"
+  ensure_package python3-venv || return 1
+  ensure_package python3-pip || return 1
+  ensure_package python3-full || true
+  printf '%b[3/4]%b Checking LXC...\n' "$CYAN" "$RESET"
+  ensure_command lxc lxc || return 1
   printf '%b[4/4]%b Checking Node.js / PM2...\n' "$CYAN" "$RESET"
-  if ! command -v node >/dev/null 2>&1; then curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/dev/null || return 1; apt_install nodejs || return 1; fi
-  if ! command -v npm >/dev/null 2>&1; then apt_install npm || return 1; fi
-  if ! command -v pm2 >/dev/null 2>&1; then printf '%b• Installing PM2...%b\n' "$CYAN" "$RESET"; $SUDO npm install -g pm2 || return 1; fi
-  command -v pm2 >/dev/null 2>&1 || return 1; mkdir -p "$ROOT"; chmod 700 "$ROOT"; printf '%b✓ Runtime ready.%b\n\n' "$GREEN" "$RESET"
+  if ! command_ready node; then curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash - >/tmp/cjh-node-setup.log 2>&1 || { tail -30 /tmp/cjh-node-setup.log; return 1; }; apt_install nodejs || return 1; fi
+  if ! command_ready npm; then ensure_command npm npm || return 1; fi
+  if ! command_ready pm2; then printf '%b• Installing PM2...%b\n' "$CYAN" "$RESET"; $SUDO npm install -g pm2 || return 1; fi
+  command_ready pm2 || return 1
+  mkdir -p "$ROOT"; chmod 700 "$ROOT"; printf '%b✓ Runtime ready.%b\n\n' "$GREEN" "$RESET"
 }
 create_python_env(){
   local dir="$1"; rm -rf "$dir/venv"; mkdir -p "$dir"
@@ -42,7 +53,7 @@ list_bots(){ mapfile -t bots < <(find "$ROOT" -mindepth 1 -maxdepth 1 -type d -p
 choose_bot(){ list_bots; [ "${#bots[@]}" -gt 0 ] || { printf '%bNo bots installed.%b\n' "$YELLOW" "$RESET"; return 1; }; local i=1 bot; for bot in "${bots[@]}"; do printf '  %b[%02d]%b %s\n' "$CYAN" "$i" "$RESET" "$bot"; i=$((i+1)); done; printf '\n%bSelect bot:%b ' "$WHITE" "$RESET"; read -r n; [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -ge 1 ] && [ "$n" -le "${#bots[@]}" ] || return 1; SELECTED="${bots[$((n-1))]}"; }
 slug(){ printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g;s/^-+//;s/-+$//'; }
 create_bot(){
- header; printf '%bDEPLOY REAL VPS + DISCORD BOT%b\n\n' "$CYAN" "$RESET"; setup_runtime || { printf '%bRuntime setup failed. Use a supported Ubuntu/Debian VPS.%b\n' "$RED" "$RESET"; pause_menu; return; }
+ header; printf '%bDEPLOY REAL VPS + DISCORD BOT%b\n\n' "$CYAN" "$RESET"; setup_runtime || { printf '%bRuntime setup failed. Check /tmp/cjh-apt-install.log.%b\n' "$RED" "$RESET"; pause_menu; return; }
  printf '%bBot name%b [cjh-vps]: ' "$DIM" "$RESET"; read -r input; local name; name="$(slug "${input:-cjh-vps}")"; [ -n "$name" ] || name=cjh-vps; local dir="$ROOT/$name"; [ ! -e "$dir" ] || { printf '%bBot already exists.%b\n' "$YELLOW" "$RESET"; pause_menu; return; }
  printf '%bDiscord bot token%b: ' "$DIM" "$RESET"; read -r -s token; printf '\n'; printf '%bMain admin Discord user ID%b: ' "$DIM" "$RESET"; read -r admin_id; printf '%bSelf-deploy role ID%b [0=disabled]: ' "$DIM" "$RESET"; read -r deploy_role; deploy_role="${deploy_role:-0}"
  local detected_host; detected_host="$(detect_host)"; printf '%bPublic host IP/domain%b [%s]: ' "$DIM" "$RESET" "${detected_host:-not detected}"; read -r host_ip; host_ip="${host_ip:-$detected_host}"
@@ -67,7 +78,7 @@ DEPLOY_CPU=3
 DEPLOY_DISK=80
 DEPLOY_ROLE_ID=$deploy_role
 VPS_DEPLOY_LIMIT=2
-BOT_VERSION=8.0.4-PRO
+BOT_VERSION=8.0.5-PRO
 BOT_DEVELOPER=root_dora
 EOF
  chmod 600 "$dir/.env"
@@ -83,5 +94,5 @@ status(){ header; printf '%bRUNTIME%b\nPython: %s\nLXC: %s\nPM2: %s\nPublic IP: 
 menu(){ header; printf '%b  01%b  Install / create VPS bot\n' "$CYAN" "$RESET"; printf '%b  02%b  Start bot\n' "$GREEN" "$RESET"; printf '%b  03%b  Stop bot\n' "$YELLOW" "$RESET"; printf '%b  04%b  Restart bot\n' "$PURPLE" "$RESET"; printf '%b  05%b  Live logs\n' "$PINK" "$RESET"; printf '%b  06%b  Update bot\n' "$CYAN" "$RESET"; printf '%b  07%b  Remove bot\n' "$RED" "$RESET"; printf '%b  08%b  System / LXC / PM2 status\n' "$WHITE" "$RESET"; printf '%b  Q %b Quit\n\n' "$DIM" "$RESET"; printf '%bSelect › %b' "$WHITE" "$CYAN"; read -r choice; case "$choice" in 1|01) create_bot;;2|02) manage START;;3|03) manage STOP;;4|04) manage RESTART;;5|05) manage LOGS;;6|06) update_bot;;7|07) remove_bot;;8|08) status;;q|Q) exit 0;;*) printf '%bInvalid option.%b\n' "$YELLOW" "$RESET"; sleep 1;;esac; }
 printf '%bCJH Bot Hosting v%s%b\n' "$PURPLE" "$VERSION" "$RESET"
 printf '%bInitializing control center...%b\n' "$DIM" "$RESET"
-setup_runtime || { printf '%bRuntime setup failed. Check /tmp/cjh-apt-install.log and try again.%b\n' "$RED" "$RESET"; exit 1; }
+setup_runtime || { printf '%bRuntime setup failed. Check /tmp/cjh-apt-install.log and /tmp/cjh-apt-update.log.%b\n' "$RED" "$RESET"; exit 1; }
 while :; do menu; done
