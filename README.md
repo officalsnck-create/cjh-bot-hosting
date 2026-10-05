@@ -1,208 +1,205 @@
-# 🤖 CJH Bot Hosting
+# 🤖 SNCK / CJH Bot Hosting
 
-A production-focused Discord bot hosting and management toolkit for Ubuntu/Debian VPS servers.
+A real Discord bot + LXD VPS management toolkit for Ubuntu/Debian hosts.
 
-CJH uses a **single installer**, PM2 for process supervision, and a real Discord.js runtime. The installer validates the bot source before starting it and provides a complete bot lifecycle menu.
+> **Made by root_dora**
 
-## ✨ What is included
+## What changed in v9
 
-### VPS / hosting manager
-
-- 🚀 One-command installer
-- 🎨 Premium terminal UI with purple/cyan/pink ANSI glass-style presentation
-- 🤖 Deploy a real Discord bot
-- 🟢 Start
-- 🔴 Stop
-- 🔄 Restart
-- 📜 Live logs
-- ⬆️ Update an installed bot from the current repository bot source
-- 🗑️ Safe remove with explicit confirmation
-- 📊 Node.js / npm / PM2 status
-- 💾 PM2 persistence
-- 🧹 Failed installs roll back instead of leaving a half-created bot
-- 🔐 `.env` is created with restrictive permissions
-- ✅ Node.js syntax validation before a bot is started
+- Real **LXD** runtime validation instead of treating the legacy `lxc` package as LXD.
+- Automatic LXD installation/initialization on supported Ubuntu/Debian VPS hosts.
+- APT handling for the known unsupported `r2u` `deb-src` entry.
+- Isolated Python virtual environment for every bot.
+- `systemd` service support on normal VPS hosts, with a fallback for containerized development environments.
+- Python LXD API client for actual VPS provisioning.
+- Real Discord moderation commands: clear, kick, ban, timeout, lock and unlock.
+- Real VPS commands: deploy, list, start, stop and admin delete.
+- SQLite persistence and automatic bot restart.
+- Discord embeds use the footer **Made by root_dora**.
 
 ## ⚡ One-command installer
 
-On Ubuntu/Debian:
+On a supported Ubuntu/Debian VPS:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/officalsnck-create/cjh-bot-hosting/main/setup.sh)
+bash <(curl -fsSL "https://raw.githubusercontent.com/officalsnck-create/cjh-bot-hosting/main/setup.sh?$(date +%s)")
 ```
 
-The installer is intentionally consolidated: **`setup.sh` is the only installer entrypoint.**
+The cache-busting query helps avoid an older raw GitHub response.
 
-## 🧭 Management menu
+## 🖥️ Menu
 
 ```text
-╭──────────────────────────────────────────────────────────────────────────────╮
-│  CJH BOT HOSTING  v7.0.0 • REAL DISCORD CONTROL                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
+╭──────────────────────────────────────────────────────────────────────────╮
+│  SNCK BOT HOSTING  v9.0.0  •  VPS CONTROL CENTER                        │
+╰──────────────────────────────────────────────────────────────────────────╯
 
-  01  Deploy new bot
-  02  Start bot
-  03  Stop bot
-  04  Restart bot
-  05  Live logs
-  06  Update bot
-  07  Remove bot
-  08  System / PM2 status
+  01  Install / Create Bot + LXD VPS Node
+  02  Start Bot
+  03  Stop Bot
+  04  Restart Bot
+  05  Live Logs
+  06  Update Bot
+  07  Remove Bot
+  08  System / LXD / Service Status
+  09  Full Self Check
   Q   Quit
 ```
 
-There are no fake/demo management actions in the menu: each lifecycle action maps to the local PM2 process and filesystem.
+These are real service/filesystem operations. There are no placeholder demo buttons.
 
-## 🤖 Real Discord features
+## 🧱 Architecture
 
-The generated bot uses the Discord API and Discord.js v14.
+```text
+Discord
+   │
+   ▼
+SNCK Python Bot
+   │
+   ▼
+Python LXD API
+   │
+   ▼
+LXD daemon
+   ├── VPS 01
+   ├── VPS 02
+   └── VPS ...
+```
 
-### Information
+The bot uses the LXD API rather than scraping terminal output. This avoids the earlier problem where the Ubuntu `lxc` package was installed but the LXD daemon was not actually usable.
 
-- `/help`
-- `/ping`
-- `/security`
-- `/server`
-- `/userinfo`
-- `/avatar`
-- `/membercount`
+## 🔐 SSH access for deployed VPS
+
+For secure access, configure an SSH public key on the host before using `!deploy`.
+
+Add this to the bot's `.env`:
+
+```env
+DEPLOY_SSH_PUBLIC_KEY=ssh-ed25519 AAAA...your-public-key...
+```
+
+The bot injects that public key through cloud-init and exposes SSH through an LXD proxy port. **Never put a private SSH key in `.env` or Discord.**
+
+After editing `.env`, restart the bot from the installer menu.
+
+## 🤖 Discord commands
+
+### VPS
+
+```text
+!deploy
+!vps
+!vps-start <container-name>
+!vps-stop <container-name>
+!vps-delete <container-name>   # main admin only
+```
+
+The deployment role is controlled by `DEPLOY_ROLE_ID`. The main admin is controlled by `MAIN_ADMIN_ID`.
+
+Default VPS resources are controlled by:
+
+```env
+DEPLOY_RAM=16
+DEPLOY_CPU=3
+DEPLOY_DISK=80
+VPS_DEPLOY_LIMIT=2
+DEPLOY_SLOT=0
+DEFAULT_VPS_EXPIRATION_DAYS=30
+```
 
 ### Moderation
 
-- `/clear`
-- `/kick`
-- `/ban`
-- `/unban`
-- `/timeout`
-- `/untimeout`
-- `/warn`
-- `/warnings`
-- `/clearwarnings`
+```text
+!clear [amount]
+!kick <member> [reason]
+!ban <member> [reason]
+!timeout <member> [minutes] [reason]
+!lock
+!unlock
+```
 
-Moderation actions check Discord permissions and role hierarchy before performing the action.
+Discord permission checks and role hierarchy checks are applied by the bot.
 
-### Channel management
+### Information
 
-- `/lock`
-- `/unlock`
-- `/slowmode`
+```text
+!ping
+!server
+!security
+!help
+```
 
-### Community / utility
+## 🛠️ Host requirements
 
-- `/announce`
-- `/say`
-- `/poll`
-- `/nick`
+For **actual VPS creation**, use a normal Ubuntu/Debian VM or VPS where LXD can run as the host container manager.
 
-### Server configuration
+GitHub Codespaces and Google Colab are useful for development/testing, but they are not reliable LXD host environments. The installer therefore verifies the LXD daemon instead of pretending that package installation alone means VPS creation works.
 
-- `/setlogs` — persistent moderation logging
-- `/setwelcome` — persistent welcome channel
-- `/setstatus` — change bot activity
+The host must pass:
 
-### Automatic behavior
+```bash
+lxc version
+lxc info
+lxc storage list
+lxc network list
+```
 
-- 👋 Real welcome messages
-- 🛡️ Moderation log embeds
-- 💾 Persistent warning storage in `data.json`
-- 📊 Yes/no reaction polls
-- 🧩 Slash-command registration through Discord's API
+## 🔧 Diagnostics
 
-## 💎 Bot message design
+If installation stops:
 
-CJH responses use Discord embeds instead of plain, unfinished-looking messages. Successful actions use a clean confirmation card, failures use a separate error card, and moderation logs use their own embed style.
+```bash
+cat /tmp/cjh-apt-update.log
+cat /tmp/cjh-apt-install.log
+cat /tmp/cjh-lxc-version.log
+cat /tmp/cjh-lxc-info.log
+cat /tmp/cjh-lxc-storage.log
+cat /tmp/cjh-lxc-network.log
+```
 
-Every CJH embed carries the footer:
-
-> **Made by root_dora • CJH Bot Hosting**
-
-## 🔐 Discord setup
-
-Create a bot application in Discord's official developer tools and keep the token private.
-
-The bot requires the Discord permissions appropriate to the commands you enable, such as:
-
-- Manage Messages for `/clear`
-- Kick Members for `/kick`
-- Ban Members for `/ban` and `/unban`
-- Moderate Members for `/timeout`, `/untimeout`, `/warn`, and warning management
-- Manage Channels for `/lock`, `/unlock`, and `/slowmode`
-- Manage Server for configuration and announcements
-- Manage Nicknames for `/nick`
-
-The welcome system uses the Guild Members gateway intent. Enable the corresponding privileged intent in the Discord Developer Portal if your application requires it.
-
-**Never publish your bot token.** If it is exposed, rotate it immediately.
+Or select **09 — Full Self Check** in the installer.
 
 ## 📁 Runtime layout
 
 ```text
 ~/cjh-bots/
-└── my-bot/
+└── <bot-name>/
     ├── .env
-    ├── bot.js
-    ├── package.json
-    ├── package-lock.json
-    └── data.json
+    ├── bot.py
+    ├── requirements.txt
+    ├── venv/
+    ├── bot.log
+    └── vps.db
 ```
 
-The `.env` contains the bot credentials and is created with restrictive permissions. `data.json` stores per-server configuration and warnings.
+On systemd-capable hosts:
 
-## 🛠️ Requirements
-
-- Ubuntu/Debian VPS
-- Internet connection
-- `sudo` access when Node.js/PM2 must be installed
-- A Discord application and bot token
-
-The installer installs Node.js 20, npm, PM2, curl, and CA certificates when required.
-
-## 🧪 Validation and recovery
-
-Before the bot is started, CJH runs:
-
-```bash
-node --check bot.js
+```text
+/etc/systemd/system/cjh-<bot-name>.service
 ```
 
-The installer also installs dependencies before launching PM2. If source download, syntax validation, or dependency installation fails during a new deployment, the incomplete bot directory is removed.
+## 🔒 Security
 
-For an installed bot, use **Update bot** to download the current repository bot source, validate it, install dependencies, and restart the bot.
+- Never publish the Discord bot token.
+- Never publish a private SSH key.
+- Use a dedicated deployment role.
+- Give the Discord bot only the permissions it needs.
+- Keep Ubuntu/Debian and LXD updated.
+- Do not expose the LXD API socket to the public internet.
 
-## 📜 PM2 commands
-
-```bash
-pm2 list
-pm2 logs
-pm2 save
-pm2 resurrect
-```
-
-CJH saves the process list after lifecycle operations so bots can be restored after a reboot when PM2 startup has been configured on the VPS.
-
-## 🔒 Security notes
-
-- Never commit tokens or `.env` files.
-- Use least-privilege Discord permissions.
-- Keep the VPS and Node.js packages updated.
-- Do not run untrusted bot code.
-- Review the installer before running it on a production server if your environment has strict change-control requirements.
-
-## 🧩 Project files
+## 📦 Project files
 
 ```text
 cjh-bot-hosting/
 ├── README.md
 ├── setup.sh
+├── bot.py
+├── requirements.txt
 └── bot-template.js
 ```
 
-`setup.sh` is the single installer/manager. `bot-template.js` is the real Discord bot template downloaded during deployment.
-
-## 📜 License
-
-See the repository license information for the applicable terms.
+`setup.sh` is the single installer/manager entrypoint. `bot.py` is the real Python Discord + LXD implementation.
 
 ---
 
-**CJH Bot Hosting — real Discord automation, clean VPS management, and a better terminal experience.**
+**SNCK / CJH Bot Hosting — real Discord automation, real LXD VPS provisioning, and no fake management actions.**
