@@ -9,7 +9,6 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 from pylxd import Client
-from pylxd.exceptions import LXDAPIException
 
 BASE = Path(__file__).resolve().parent
 load_dotenv(BASE / ".env")
@@ -28,6 +27,7 @@ EXPIRY_DAYS = int(os.getenv("DEFAULT_VPS_EXPIRATION_DAYS", "30"))
 VERSION = os.getenv("BOT_VERSION", "9.0.0")
 DEVELOPER = os.getenv("BOT_DEVELOPER", "root_dora")
 SSH_PUBLIC_KEY = os.getenv("DEPLOY_SSH_PUBLIC_KEY", "").strip()
+LXD_ENDPOINT = os.getenv("LXD_ENDPOINT", "").strip()
 DB = BASE / "vps.db"
 LOG = BASE / "bot.log"
 
@@ -73,15 +73,26 @@ def can_deploy(member):
     return is_admin(member.id) or DEPLOY_ROLE_ID == "0" or any(str(r.id) == DEPLOY_ROLE_ID for r in member.roles)
 
 
+def lxd_endpoint():
+    if LXD_ENDPOINT:
+        return LXD_ENDPOINT
+    snap_socket = Path("/var/snap/lxd/common/lxd/unix.socket")
+    if snap_socket.exists():
+        return f"unix://{snap_socket}"
+    return None
+
+
 def lxd_client():
-    return Client()
+    endpoint = lxd_endpoint()
+    return Client(endpoint=endpoint) if endpoint else Client()
 
 
 def lxd_ready():
     try:
         lxd_client().host_info()
         return True
-    except Exception:
+    except Exception as exc:
+        logger.warning("LXD health check failed: %s", exc)
         return False
 
 
@@ -118,30 +129,36 @@ def configure_instance(instance, port):
     config = dict(instance.config)
     config["limits.memory"] = f"{RAM_GB}GiB"
     config["limits.cpu"] = str(CPU)
-    config["user.user-data"] = "#cloud-config\n" + "\n".join([
-        "package_update: true",
-        "packages:",
-        "  - openssh-server",
-        "runcmd:",
-        "  - systemctl enable --now ssh",
-        "  - mkdir -p /root/.ssh",
-        "  - chmod 700 /root/.ssh",
-        f"  - printf '%s\\n' '{SSH_PUBLIC_KEY}' > /root/.ssh/authorized_keys",
-        "  - chmod 600 /root/.ssh/authorized_keys",
-    ])
-    instance.config = config
+    config["security.nesting"] = "true"
+    config["security.privileged"] = "true"
+    if SSH_PUBLIC_KEY:
+        config["user.user-data"] = "\n".join([
+            "#cloud-config",
+            "users:",
+            "  - name: root",
+            "    lock_passwd: false",
+            "    ssh_authorized_keys:",
+            f"      - {SSH_PUBLIC_KEY}",
+            "packages:",
+            "  - openssh-server",
+            "runcmd:",
+            "  - systemctl enable --now ssh",
+        ])
     devices = dict(instance.devices)
-    devices["root"]["size"] = f"{DISK_GB}GiB"
+    root = dict(devices.get("root", {"type": "disk", "pool": "default", "path": "/"}))
+    root["size"] = f"{DISK_GB}GiB"
+    devices["root"] = root
     devices[f"ssh-{port}"] = {"type": "proxy", "listen": f"tcp:0.0.0.0:{port}", "connect": "tcp:127.0.0.1:22"}
+    instance.config = config
     instance.devices = devices
     instance.save(wait=True)
 
 
 def create_instance(owner):
     if not lxd_ready():
-        raise RuntimeError("LXD is not reachable on this host. Run the installer self-check and use a host with LXD enabled.")
+        raise RuntimeError("LXD is not reachable on this host. Run the installer self-check and use a VPS/VM that permits LXD.")
     if not SSH_PUBLIC_KEY:
-        raise RuntimeError("DEPLOY_SSH_PUBLIC_KEY is not configured. Add your SSH public key before creating VPS instances.")
+        raise RuntimeError("DEPLOY_SSH_PUBLIC_KEY is not configured. Add an SSH public key in the bot .env before using !deploy.")
     if count_vps(owner.id) >= VPS_LIMIT:
         raise RuntimeError(f"Your VPS limit is {VPS_LIMIT}.")
     if VPS_SLOTS and count_vps() >= VPS_SLOTS:
@@ -211,7 +228,7 @@ async def deploy(ctx):
     m = await ctx.send(embed=card("Deploying", "Creating a real LXD VPS. Please wait...", 0xFEE75C))
     try:
         name, port, expires = create_instance(ctx.author)
-        text = f"**Container:** `{name}`\n**OS:** `Ubuntu 24.04`\n**Resources:** `{RAM_GB}GB RAM / {CPU} CPU / {DISK_GB}GB disk`\n**SSH:** `ssh root@{HOST_IP} -p {port}`\n**Key:** the SSH public key configured on the host\n**Expires:** `{expires[:10]}`"
+        text = f"**Container:** `{name}`\n**OS:** `Ubuntu 24.04`\n**Resources:** `{RAM_GB}GB RAM / {CPU} CPU / {DISK_GB}GB disk`\n**SSH:** `ssh root@{HOST_IP} -p {port}`\n**Auth:** your configured SSH public key\n**Expires:** `{expires[:10]}`"
         await m.edit(embed=card("VPS deployed", text, 0x57F287))
     except Exception as e:
         logger.exception("deploy failed")
@@ -288,7 +305,6 @@ async def ban(ctx, member: discord.Member, *, reason="No reason provided"):
 @bot.command()
 @commands.has_permissions(moderate_members=True)
 async def timeout(ctx, member: discord.Member, minutes: int = 10, *, reason="No reason provided"):
-    from datetime import timedelta
     minutes = max(1, min(minutes, 40320))
     if member.top_role >= ctx.author.top_role or member == ctx.guild.owner:
         await ctx.send(embed=card("Timeout blocked", "Discord role hierarchy prevents this action.", 0xED4245)); return
