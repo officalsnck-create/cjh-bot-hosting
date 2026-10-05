@@ -2,3 +2,4 @@ discord.py==2.6.3
 python-dotenv==1.1.1
 requests==2.32.5
 psutil==7.0.0
+pylxd==2.3.2
