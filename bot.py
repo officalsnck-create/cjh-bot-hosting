@@ -160,14 +160,48 @@ def count_vps(owner=None):
         ).fetchone()[0]
 
 
-def next_port():
+def lxd_instances():
+    try:
+        return lxd_client().instances.all()
+    except Exception as exc:
+        logger.warning("Unable to list LXD instances: %s", exc)
+        return []
+
+
+def lxd_instance_names():
+    return {getattr(i, "name", "") for i in lxd_instances()}
+
+
+def managed_lxd_names(prefix=None):
+    names = lxd_instance_names()
+    if prefix is None:
+        return {n for n in names if "-vps-" in n}
+    return {n for n in names if n.startswith(prefix)}
+
+
+def next_port(client=None):
+    used = set()
     with db() as c:
-        used = {
+        used.update(
             r[0]
             for r in c.execute(
                 "SELECT ssh_port FROM vps WHERE ssh_port IS NOT NULL"
             )
-        }
+        )
+
+    try:
+        client = client or lxd_client()
+        for item in client.instances.all():
+            for device in (getattr(item, "devices", {}) or {}).values():
+                if device.get("type") != "proxy":
+                    continue
+                listen = str(device.get("listen", ""))
+                match = re.search(r"tcp:[^:]+:(\\d+)$", listen)
+                if match:
+                    used.add(int(match.group(1)))
+    except Exception as exc:
+        logger.warning("Could not inspect LXD proxy ports: %s", exc)
+
     for port in range(20000, 50000):
         if port not in used:
             return port
@@ -179,6 +213,13 @@ def instance_for(name):
         return lxd_client().instances.get(name)
     except Exception:
         return None
+
+
+def instance_exists(client, name):
+    try:
+        return bool(client.instances.exists(name))
+    except Exception:
+        return instance_for(name) is not None
 
 
 def get_instance_ipv4(instance):
@@ -193,6 +234,259 @@ def get_instance_ipv4(instance):
         pass
     return None
 
+
+def existing_proxy_port(instance):
+    for device in (getattr(instance, "devices", {}) or {}).values():
+        if device.get("type") != "proxy":
+            continue
+        listen = str(device.get("listen", ""))
+        match = re.search(r"tcp:[^:]+:(\\d+)$", listen)
+        if match and device.get("connect") == "tcp:127.0.0.1:22":
+            return int(match.group(1))
+    return None
+
+
+def owner_instance_count(client, prefix):
+    names = managed_lxd_names(prefix)
+    with db() as c:
+        db_names = {
+            row["name"]
+            for row in c.execute("SELECT name FROM vps WHERE name LIKE ?", (prefix + "%",))
+        }
+    return len(names | db_names)
+
+
+def next_instance_name(client, prefix):
+    used = set()
+    for name in managed_lxd_names(prefix):
+        suffix = name[len(prefix):]
+        if suffix.isdigit():
+            used.add(int(suffix))
+    with db() as c:
+        for row in c.execute("SELECT name FROM vps WHERE name LIKE ?", (prefix + "%",)):
+            suffix = row["name"][len(prefix):]
+            if suffix.isdigit():
+                used.add(int(suffix))
+
+    number = 1
+    while number in used:
+        number += 1
+    return f"{prefix}{number}"
+
+
+def configure_instance(instance, port):
+    config = dict(instance.config)
+    config["limits.memory"] = f"{RAM_GB}GiB"
+    config["limits.cpu"] = str(CPU)
+
+    # cloud-init is supported by official Ubuntu images. The ssh-keys extension
+    # is preferred for the key itself; user-data handles openssh-server.
+    config["cloud-init.ssh-keys.snck"] = f"root:{SSH_PUBLIC_KEY}"
+    config["cloud-init.user-data"] = "\\n".join(
+        [
+            "#cloud-config",
+            "package_update: true",
+            "packages:",
+            "  - openssh-server",
+            "runcmd:",
+            "  - [systemctl, enable, --now, ssh]",
+        ]
+    )
+
+    devices = dict(instance.devices)
+    root = dict(
+        devices.get("root", {"type": "disk", "pool": "default", "path": "/"})
+    )
+    root["size"] = f"{DISK_GB}GiB"
+    devices["root"] = root
+
+    # Remove stale SNCK SSH proxies before assigning the selected port.
+    for key, device in list(devices.items()):
+        if key.startswith("ssh-") and device.get("type") == "proxy":
+            if device.get("connect") == "tcp:127.0.0.1:22":
+                devices.pop(key, None)
+
+    devices[f"ssh-{port}"] = {
+        "type": "proxy",
+        "listen": f"tcp:0.0.0.0:{port}",
+        "connect": "tcp:127.0.0.1:22",
+    }
+
+    instance.config = config
+    instance.devices = devices
+    instance.save(wait=True)
+
+
+def ensure_ssh_ready(instance):
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=120)
+    last_error = ""
+    while datetime.now(timezone.utc) < deadline:
+        try:
+            result = instance.execute(
+                [
+                    "bash",
+                    "-lc",
+                    "command -v sshd >/dev/null 2>&1 || "
+                    "(apt-get update -qq && DEBIAN_FRONTEND=noninteractive "
+                    "apt-get install -y -qq openssh-server); "
+                    "systemctl enable --now ssh",
+                ]
+            )
+            if result.exit_code == 0:
+                return
+            last_error = result.stderr or result.stdout or "SSH setup returned a non-zero exit code."
+        except Exception as exc:
+            last_error = str(exc)
+        import time
+        time.sleep(3)
+    raise RuntimeError(f"SSH service did not become ready: {last_error[:1000]}")
+
+
+def wait_for_instance(instance, timeout=120):
+    deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout)
+    last_ip = None
+    while datetime.now(timezone.utc) < deadline:
+        try:
+            state = instance.state()
+            if state.get("status") == "Running":
+                last_ip = get_instance_ipv4(instance) or last_ip
+                if last_ip:
+                    return last_ip
+        except Exception:
+            pass
+        import time
+        time.sleep(2)
+    # An LXD proxy can still provide SSH without a routable guest IP, but we
+    # require the guest to be running and SSH-ready before declaring success.
+    ensure_ssh_ready(instance)
+    return last_ip
+
+
+def persist_vps(owner, name, port, ipv4, expires, created=None):
+    created = created or datetime.now(timezone.utc).isoformat()
+    with db() as c:
+        c.execute(
+            """INSERT INTO vps(
+                owner,name,os,ram,cpu,disk,status,ssh_port,expires,created
+            ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            (
+                str(owner.id),
+                name,
+                "Ubuntu 24.04",
+                RAM_GB,
+                CPU,
+                DISK_GB,
+                "RUNNING",
+                port,
+                expires,
+                created,
+            ),
+        )
+
+
+def create_instance(owner):
+    if not lxd_ready():
+        target = LXD_ENDPOINT or "the local LXD socket"
+        raise RuntimeError(
+            f"LXD is not reachable at {target}. "
+            "Run the installer self-check on a real LXD host or configure a remote LXD endpoint."
+        )
+    if not SSH_PUBLIC_KEY:
+        raise RuntimeError(
+            "DEPLOY_SSH_PUBLIC_KEY is not configured. "
+            "Add an SSH public key to the bot .env before using !deploy."
+        )
+
+    client = lxd_client()
+    prefix = f"{safe_name(owner.display_name)}-vps-"
+
+    if owner_instance_count(client, prefix) >= VPS_LIMIT:
+        raise RuntimeError(
+            f"Your VPS limit is {VPS_LIMIT}. Existing LXD instances are counted too."
+        )
+
+    if VPS_SLOTS and len(managed_lxd_names()) >= VPS_SLOTS:
+        raise RuntimeError("Global VPS slot limit reached.")
+
+    name = next_instance_name(client, prefix)
+    port = next_port(client)
+    expires = (
+        datetime.now(timezone.utc) + timedelta(days=EXPIRY_DAYS)
+    ).isoformat()
+    created = datetime.now(timezone.utc).isoformat()
+    created_by_us = False
+
+    try:
+        profile = client.profiles.get("default")
+        root = profile.devices.get("root")
+        if not root:
+            raise RuntimeError(
+                "LXD default profile has no root disk. Initialize LXD with 'lxd init' first."
+            )
+
+        # A previous deployment can finish LXD creation and then lose the
+        # SQLite write (for example during a reinstall). Recover that real VPS
+        # instead of failing with "instance already exists".
+        if instance_exists(client, name):
+            instance = client.instances.get(name)
+            recovered_port = existing_proxy_port(instance)
+            port = recovered_port or port
+            configure_instance(instance, port)
+            state = instance.state().get("status")
+            if state != "Running":
+                instance.start(wait=True)
+            ipv4 = wait_for_instance(instance)
+            ensure_ssh_ready(instance)
+
+            try:
+                persist_vps(owner, name, port, ipv4, expires)
+            except sqlite3.IntegrityError:
+                with db() as c:
+                    c.execute(
+                        "UPDATE vps SET owner=?, status='RUNNING', ssh_port=?, expires=? WHERE name=?",
+                        (str(owner.id), port, expires, name),
+                    )
+            return name, port, expires, ipv4
+
+        instance = client.instances.create(
+            {
+                "name": name,
+                "type": "container",
+                "profiles": ["default"],
+                "source": {
+                    "type": "image",
+                    "alias": "24.04",
+                    "protocol": "simplestreams",
+                    "server": "https://cloud-images.ubuntu.com/releases",
+                },
+            },
+            wait=True,
+        )
+        created_by_us = True
+
+        configure_instance(instance, port)
+        instance.start(wait=True)
+        ipv4 = wait_for_instance(instance)
+        ensure_ssh_ready(instance)
+
+        persist_vps(owner, name, port, ipv4, expires, created)
+
+        return name, port, expires, ipv4
+    except Exception:
+        if created_by_us:
+            existing = instance_for(name)
+            if existing:
+                try:
+                    state = existing.state().get("status")
+                    if state == "Running":
+                        existing.stop(wait=True, force=True)
+                except Exception:
+                    pass
+                try:
+                    existing.delete(wait=True)
+                except Exception as cleanup_exc:
+                    logger.error("Failed to clean up %s: %s", name, cleanup_exc)
+        raise
 
 def configure_instance(instance, port):
     config = dict(instance.config)
