@@ -26,7 +26,7 @@ DISK_GB = int(os.getenv("DEPLOY_DISK", "20"))
 VPS_LIMIT = int(os.getenv("VPS_DEPLOY_LIMIT", "2"))
 VPS_SLOTS = int(os.getenv("DEPLOY_SLOT", "0"))
 EXPIRY_DAYS = int(os.getenv("DEFAULT_VPS_EXPIRATION_DAYS", "30"))
-VERSION = os.getenv("BOT_VERSION", "9.1.0")
+VERSION = os.getenv("BOT_VERSION", "9.1.1")
 DEVELOPER = os.getenv("BOT_DEVELOPER", "root_dora")
 SSH_PUBLIC_KEY = os.getenv("DEPLOY_SSH_PUBLIC_KEY", "").strip()
 
@@ -125,7 +125,7 @@ def lxd_client():
 def lxd_ready():
     try:
         client = lxd_client()
-        client.host_info()
+        client.host_info
         client.storage_pools.all()
         client.networks.all()
         client.profiles.get("default")
@@ -138,7 +138,7 @@ def lxd_ready():
 def lxd_status_text():
     try:
         client = lxd_client()
-        info = client.host_info()
+        info = client.host_info
         version = info.get("environment", {}).get("server_version", "unknown")
         return f"READY • LXD {version} • project {LXD_PROJECT}"
     except Exception as exc:
@@ -199,7 +199,7 @@ def configure_instance(instance, port):
     config["limits.cpu"] = str(CPU)
 
     if SSH_PUBLIC_KEY:
-        config["cloud-init.user-data"] = "\n".join(
+        config["user.user-data"] = "\n".join(
             [
                 "#cloud-config",
                 "users:",
@@ -265,7 +265,17 @@ def create_instance(owner):
         raise RuntimeError("Global VPS slot limit reached.")
 
     client = lxd_client()
-    name = f"{safe_name(owner.display_name)}-vps-{count_vps() + 1}"
+    prefix = f"{safe_name(owner.display_name)}-vps-"
+    with db() as c:
+        used_numbers = set()
+        for row in c.execute("SELECT name FROM vps WHERE name LIKE ?", (prefix + "%",)):
+            suffix = row["name"][len(prefix):]
+            if suffix.isdigit():
+                used_numbers.add(int(suffix))
+    number = 1
+    while number in used_numbers:
+        number += 1
+    name = f"{prefix}{number}"
     port = next_port()
     expires = (
         datetime.now(timezone.utc) + timedelta(days=EXPIRY_DAYS)
@@ -331,12 +341,73 @@ def create_instance(owner):
 @bot.event
 async def on_ready():
     init_db()
+    try:
+        synced = await bot.tree.sync()
+        logger.info("Synced %d application commands", len(synced))
+    except Exception:
+        logger.exception("Application command sync failed")
     logger.info("Connected as %s | %s", bot.user, lxd_status_text())
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching, name="SNCK VPS Hosting"
         )
     )
+
+
+@bot.tree.command(name="about", description="Show CJH VPS bot information")
+async def slash_about(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        embed=card(
+            "CJH VPS",
+            f"Real Discord bot + LXD VPS control center.\n"
+            f"Version: **{VERSION}**\n"
+            f"Developer: **{DEVELOPER}**\n"
+            f"LXD: **{lxd_status_text()}**\n"
+            f"Use \`{PREFIX}help\` for the full command list.",
+        )
+    )
+
+
+@bot.tree.command(name="ping", description="Check bot latency and LXD status")
+async def slash_ping(interaction: discord.Interaction):
+    await interaction.response.send_message(
+        embed=card(
+            "Pong",
+            f"Latency: \`{round(bot.latency * 1000)}ms\`\nLXD: **{lxd_status_text()}**",
+            0x57F287,
+        )
+    )
+
+
+@bot.tree.command(name="deploy", description="Create a real Ubuntu LXD VPS")
+async def slash_deploy(interaction: discord.Interaction):
+    if not isinstance(interaction.user, discord.Member) or not can_deploy(interaction.user):
+        await interaction.response.send_message(
+            embed=card("Access denied", "You do not have the VPS deployment role.", 0xED4245),
+            ephemeral=True,
+        )
+        return
+    await interaction.response.send_message(
+        embed=card("Deploying", "Creating a real Ubuntu 24.04 LXD VPS...", 0xFEE75C)
+    )
+    message = await interaction.original_response()
+    try:
+        name, port, expires, ipv4 = create_instance(interaction.user)
+        await message.edit(
+            embed=card(
+                "VPS deployed",
+                f"**Container:** \`{name}\`\n"
+                f"**OS:** \`Ubuntu 24.04\`\n"
+                f"**Resources:** \`{RAM_GB}GB RAM / {CPU} CPU / {DISK_GB}GB disk\`\n"
+                f"**VPS IPv4:** \`{ipv4 or 'not assigned yet'}\`\n"
+                f"**SSH:** \`ssh root@{HOST_IP} -p {port}\`\n"
+                f"**Expires:** \`{expires[:10]}\`",
+                0x57F287,
+            )
+        )
+    except Exception as exc:
+        logger.exception("slash deploy failed")
+        await message.edit(embed=card("Deployment failed", str(exc)[:3500], 0xED4245))
 
 
 @bot.command()
