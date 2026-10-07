@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import re
@@ -392,7 +393,7 @@ async def slash_deploy(interaction: discord.Interaction):
     )
     message = await interaction.original_response()
     try:
-        name, port, expires, ipv4 = create_instance(interaction.user)
+        name, port, expires, ipv4 = await asyncio.to_thread(create_instance, interaction.user)
         await message.edit(
             embed=card(
                 "VPS deployed",
@@ -500,7 +501,7 @@ async def deploy(ctx):
         embed=card("Deploying", "Creating a real Ubuntu 24.04 LXD VPS...", 0xFEE75C)
     )
     try:
-        name, port, expires, ipv4 = create_instance(ctx.author)
+        name, port, expires, ipv4 = await asyncio.to_thread(create_instance, ctx.author)
         text = (
             f"**Container:** `{name}`\n"
             f"**OS:** `Ubuntu 24.04`\n"
