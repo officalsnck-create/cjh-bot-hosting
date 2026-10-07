@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -60,6 +61,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
+DEPLOY_LOCK = threading.Lock()
 
 
 def db():
@@ -350,8 +352,11 @@ def wait_for_instance(instance, timeout=120):
             state = instance.state()
             if state.get("status") == "Running":
                 last_ip = get_instance_ipv4(instance) or last_ip
-                if last_ip:
+                try:
+                    ensure_ssh_ready(instance)
                     return last_ip
+                except Exception:
+                    pass
         except Exception:
             pass
         import time
@@ -384,7 +389,7 @@ def persist_vps(owner, name, port, ipv4, expires, created=None):
         )
 
 
-def create_instance(owner):
+def _create_instance(owner):
     if not lxd_ready():
         target = LXD_ENDPOINT or "the local LXD socket"
         raise RuntimeError(
@@ -631,6 +636,12 @@ def create_instance(owner):
             except Exception:
                 pass
         raise
+
+
+def create_instance(owner):
+    # Serialize deployment requests so name/port allocation cannot race.
+    with DEPLOY_LOCK:
+        return _create_instance(owner)
 
 
 @bot.event
