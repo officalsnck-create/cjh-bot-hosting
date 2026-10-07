@@ -33,7 +33,7 @@ The cache-busting query helps avoid an older raw GitHub response.
 
 ```text
 ╭──────────────────────────────────────────────────────────────────────────╮
-│  SNCK BOT HOSTING  v9.1.1  •  VPS CONTROL CENTER                        │
+│  SNCK BOT HOSTING  v9.1.2  •  VPS CONTROL CENTER                        │
 ╰──────────────────────────────────────────────────────────────────────────╯
 
   01  Install / Create Bot + LXD VPS Node
@@ -207,3 +207,11 @@ cjh-bot-hosting/
 ---
 
 **SNCK / CJH Bot Hosting — real Discord automation, real LXD VPS provisioning, and no fake management actions.**
+
+## v9.1.2 reliability fixes
+
+- Reconciles real LXD instances that survived a bot/database reinstall, so a stale `user-vps-1` no longer causes a duplicate-name deployment failure.
+- Counts existing LXD instances when enforcing VPS limits and allocates SSH proxy ports from both SQLite and LXD state.
+- Serializes deployment requests to prevent two simultaneous deploys from selecting the same name or port.
+- Waits for SSH readiness and uses the actual PyLXD `execute()` tuple return format.
+- Uninstall now stops/disables the systemd unit, removes PM2 entries, terminates stale bot processes, removes the bot directory, and verifies whether the old process is gone.
