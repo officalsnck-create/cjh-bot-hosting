@@ -13,7 +13,9 @@ A real Discord bot + LXD VPS management toolkit for Ubuntu/Debian hosts.
 - `systemd` service support on normal VPS hosts, with a fallback for containerized development environments.
 - Python LXD API client for actual VPS provisioning.
 - Real Discord moderation commands: clear, kick, ban, timeout, lock and unlock.
-- Real VPS commands: deploy, list, start, stop and admin delete.
+- Real VPS commands: deploy, list, IP lookup, start, stop, restart and admin delete.
+- Working Discord application commands: `/about`, `/ping`, and `/deploy` with automatic command sync.
+- LXD health checks use PyLXD's actual `host_info` property and validate storage, network, and the default profile.
 - SQLite persistence and automatic bot restart.
 - Discord embeds use the footer **Made by root_dora**.
 
@@ -31,7 +33,7 @@ The cache-busting query helps avoid an older raw GitHub response.
 
 ```text
 ╭──────────────────────────────────────────────────────────────────────────╮
-│  SNCK BOT HOSTING  v9.0.0  •  VPS CONTROL CENTER                        │
+│  SNCK BOT HOSTING  v9.1.1  •  VPS CONTROL CENTER                        │
 ╰──────────────────────────────────────────────────────────────────────────╯
 
   01  Install / Create Bot + LXD VPS Node
@@ -91,6 +93,8 @@ After editing `.env`, restart the bot from the installer menu.
 !vps
 !vps-start <container-name>
 !vps-stop <container-name>
+!vps-restart <container-name>
+!vps-ip <container-name>
 !vps-delete <container-name>   # main admin only
 ```
 
@@ -99,9 +103,9 @@ The deployment role is controlled by `DEPLOY_ROLE_ID`. The main admin is control
 Default VPS resources are controlled by:
 
 ```env
-DEPLOY_RAM=16
-DEPLOY_CPU=3
-DEPLOY_DISK=80
+DEPLOY_RAM=2
+DEPLOY_CPU=2
+DEPLOY_DISK=20
 VPS_DEPLOY_LIMIT=2
 DEPLOY_SLOT=0
 DEFAULT_VPS_EXPIRATION_DAYS=30
