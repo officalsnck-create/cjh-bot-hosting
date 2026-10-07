@@ -322,7 +322,7 @@ def ensure_ssh_ready(instance):
     last_error = ""
     while datetime.now(timezone.utc) < deadline:
         try:
-            result = instance.execute(
+            exit_code, stdout, stderr = instance.execute(
                 [
                     "bash",
                     "-lc",
@@ -332,9 +332,9 @@ def ensure_ssh_ready(instance):
                     "systemctl enable --now ssh",
                 ]
             )
-            if result.exit_code == 0:
+            if exit_code == 0:
                 return
-            last_error = result.stderr or result.stdout or "SSH setup returned a non-zero exit code."
+            last_error = stderr or stdout or "SSH setup returned a non-zero exit code."
         except Exception as exc:
             last_error = str(exc)
         import time
