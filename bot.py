@@ -493,58 +493,6 @@ def _create_instance(owner):
                     logger.error("Failed to clean up %s: %s", name, cleanup_exc)
         raise
 
-def configure_instance(instance, port):
-    config = dict(instance.config)
-    config["limits.memory"] = f"{RAM_GB}GiB"
-    config["limits.cpu"] = str(CPU)
-
-    if SSH_PUBLIC_KEY:
-        config["user.user-data"] = "\n".join(
-            [
-                "#cloud-config",
-                "users:",
-                "  - name: root",
-                "    lock_passwd: false",
-                "    ssh_authorized_keys:",
-                f"      - {SSH_PUBLIC_KEY}",
-                "packages:",
-                "  - openssh-server",
-                "runcmd:",
-                "  - [systemctl, enable, --now, ssh]",
-            ]
-        )
-
-    devices = dict(instance.devices)
-    root = dict(
-        devices.get("root", {"type": "disk", "pool": "default", "path": "/"})
-    )
-    root["size"] = f"{DISK_GB}GiB"
-    devices["root"] = root
-
-    # LXD proxy forwards a public host TCP port to SSH inside the container.
-    devices[f"ssh-{port}"] = {
-        "type": "proxy",
-        "listen": f"tcp:0.0.0.0:{port}",
-        "connect": "tcp:127.0.0.1:22",
-    }
-
-    instance.config = config
-    instance.devices = devices
-    instance.save(wait=True)
-
-
-def wait_for_instance(instance, timeout=90):
-    deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout)
-    while datetime.now(timezone.utc) < deadline:
-        try:
-            state = instance.state()
-            if state.get("status") == "Running":
-                return get_instance_ipv4(instance)
-        except Exception:
-            pass
-        import time
-        time.sleep(2)
-    raise RuntimeError("VPS started but did not become ready before the timeout.")
 
 
 def create_instance(owner):
@@ -662,13 +610,16 @@ async def on_ready():
 
 @bot.tree.command(name="about", description="Show CJH VPS bot information")
 async def slash_about(interaction: discord.Interaction):
-    await interaction.response.send_message(
+    # Acknowledge immediately; LXD status checks may take longer than Discord's 3s window.
+    await interaction.response.defer()
+    status = await asyncio.to_thread(lxd_status_text)
+    await interaction.edit_original_response(
         embed=card(
             "CJH VPS",
             f"Real Discord bot + LXD VPS control center.\n"
             f"Version: **{VERSION}**\n"
             f"Developer: **{DEVELOPER}**\n"
-            f"LXD: **{lxd_status_text()}**\n"
+            f"LXD: **{status}**\n"
             f"Use \`{PREFIX}help\` for the full command list.",
         )
     )
@@ -676,10 +627,12 @@ async def slash_about(interaction: discord.Interaction):
 
 @bot.tree.command(name="ping", description="Check bot latency and LXD status")
 async def slash_ping(interaction: discord.Interaction):
-    await interaction.response.send_message(
+    await interaction.response.defer()
+    status = await asyncio.to_thread(lxd_status_text)
+    await interaction.edit_original_response(
         embed=card(
             "Pong",
-            f"Latency: \`{round(bot.latency * 1000)}ms\`\nLXD: **{lxd_status_text()}**",
+            f"Latency: \`{round(bot.latency * 1000)}ms\`\nLXD: **{status}**",
             0x57F287,
         )
     )
