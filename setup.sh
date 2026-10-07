@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-VERSION="9.0.0"
+VERSION="9.1.1"
 BRAND="SNCK"
 ROOT="${CJH_HOME:-$HOME/cjh-bots}"
 BASE_URL="https://raw.githubusercontent.com/officalsnck-create/cjh-bot-hosting/main"
@@ -60,7 +60,7 @@ service_action(){ local action="$1" name="$2" unit; unit="$(service_name "$name"
 create_bot(){
   header; printf '%bDEPLOY REAL DISCORD BOT + LXD VPS NODE%b\n\n' "$CYAN" "$RESET"; setup_runtime || { fail "Runtime setup failed."; pause_menu; return; }
   printf '%bBot name%b [cjh-vps]: ' "$DIM" "$RESET"; read -r input; local name; name="$(slug "${input:-cjh-vps}")"; [[ -n "$name" ]] || name=cjh-vps; local dir="$ROOT/$name"; [[ ! -e "$dir" ]] || { warn "Bot already exists: $name"; pause_menu; return; }
-  printf '%bDiscord bot token%b: ' "$DIM" "$RESET"; read -r -s token; printf '\n'; printf '%bMain admin Discord user ID%b: ' "$DIM" "$RESET"; read -r admin_id; printf '%bDeploy role ID%b [0=disabled]: ' "$DIM" "$RESET"; read -r deploy_role; deploy_role="${deploy_role:-0}"; local host_ip; host_ip="$(detect_host)"; printf '%bPublic host IP/domain%b [%s]: ' "$DIM" "$RESET" "${host_ip:-not detected}"; read -r entered_host; host_ip="${entered_host:-$host_ip}"; printf '%bSSH public key%b [optional on bot-only hosts]: ' "$DIM" "$RESET"; read -r ssh_key
+  printf '%bDiscord bot token%b: ' "$DIM" "$RESET"; read -r -s token; printf '\n'; printf '%bMain admin Discord user ID%b: ' "$DIM" "$RESET"; read -r admin_id; printf '%bDeploy role ID%b [0=disabled]: ' "$DIM" "$RESET"; read -r deploy_role; deploy_role="${deploy_role:-0}"; local host_ip; host_ip="$(detect_host)"; printf '%bPublic host IP/domain%b [%s]: ' "$DIM" "$RESET" "${host_ip:-not detected}"; read -r entered_host; host_ip="${entered_host:-$host_ip}"; printf '%bSSH public key%b [required when LXD is available]: ' "$DIM" "$RESET"; read -r ssh_key
   [[ -n "$token" && "$admin_id" =~ ^[0-9]{17,20}$ && -n "$host_ip" ]] || { warn "Token, valid admin ID and public host are required."; pause_menu; return; }
   mkdir -p "$dir"; chmod 700 "$dir"; umask 077; curl -fL --retry 3 --retry-delay 1 "${BOT_URL}?$(date +%s)" -o "$dir/bot.py" || { rm -rf "$dir"; fail "bot.py download failed."; pause_menu; return; }; curl -fL --retry 3 --retry-delay 1 "${REQ_URL}?$(date +%s)" -o "$dir/requirements.txt" || { rm -rf "$dir"; fail "requirements.txt download failed."; pause_menu; return; }; python3 -m py_compile "$dir/bot.py" || { rm -rf "$dir"; fail "Bot Python syntax validation failed."; pause_menu; return; }
   cat >"$dir/.env" <<ENV
@@ -72,22 +72,38 @@ MAIN_ADMIN_ID=$admin_id
 VPS_USER_ROLE_ID=0
 DEFAULT_STORAGE_POOL=default
 DEFAULT_VPS_EXPIRATION_DAYS=30
-DEPLOY_RAM=16
-DEPLOY_CPU=3
-DEPLOY_DISK=80
+DEPLOY_RAM=2
+DEPLOY_CPU=2
+DEPLOY_DISK=20
 DEPLOY_ROLE_ID=$deploy_role
 DEPLOY_SLOT=0
 VPS_DEPLOY_LIMIT=2
 BOT_VERSION=$VERSION
 BOT_DEVELOPER=root_dora
 DEPLOY_SSH_PUBLIC_KEY=$ssh_key
+LXD_ENDPOINT=
+LXD_CERT=
+LXD_KEY=
+LXD_VERIFY=
+LXD_PROJECT=default
 ENV
   chmod 600 "$dir/.env"; create_python_env "$dir" || { rm -rf "$dir"; fail "Python environment creation failed."; pause_menu; return; }; "$dir/venv/bin/python" -m pip install --disable-pip-version-check -r "$dir/requirements.txt" || { rm -rf "$dir"; fail "Bot dependencies failed."; pause_menu; return; }; service_start "$name" "$dir" || { fail "Bot service failed to start."; pause_menu; return; }; ok "REAL bot installed and started."; printf '%bDirectory:%b %s\n%bService:%b %s\n' "$DIM" "$RESET" "$dir" "$DIM" "$RESET" "$(service_name "$name")"; pause_menu; }
 manage(){ local action="$1"; header; printf '%b%s BOT%b\n\n' "$CYAN" "$action" "$RESET"; choose_bot || { pause_menu; return; }; case "$action" in START) service_action start "$SELECTED";; STOP) service_action stop "$SELECTED";; RESTART) service_action restart "$SELECTED";; LOGS) if systemd_available && [[ -f "/etc/systemd/system/$(service_name "$SELECTED").service" ]]; then $SUDO journalctl -u "$(service_name "$SELECTED").service" -n 150 --no-pager; elif command_ready pm2; then pm2 logs "$SELECTED" --lines 150 --nostream; else tail -150 "$ROOT/$SELECTED/bot.log" 2>/dev/null || true; fi;; esac; pause_menu; }
 update_bot(){ header; printf '%bUPDATE BOT%b\n\n' "$CYAN" "$RESET"; choose_bot || { pause_menu; return; }; local dir="$ROOT/$SELECTED" tmp="$ROOT/.${SELECTED}.bot.py.new"; if curl -fL --retry 3 --retry-delay 1 "${BOT_URL}?$(date +%s)" -o "$tmp" && python3 -m py_compile "$tmp"; then mv "$tmp" "$dir/bot.py"; "$dir/venv/bin/python" -m pip install --disable-pip-version-check -r "$dir/requirements.txt" >/tmp/cjh-bot-update.log 2>&1 || true; service_action restart "$SELECTED"; ok "Bot updated and restarted."; else rm -f "$tmp"; fail "Update validation failed; existing bot.py was kept."; fi; pause_menu; }
 remove_bot(){ header; printf '%bREMOVE BOT%b\n\n' "$RED" "$RESET"; choose_bot || { pause_menu; return; }; printf '%bType REMOVE to delete %s:%b ' "$YELLOW" "$SELECTED" "$RESET"; read -r confirm; [[ "$confirm" == REMOVE ]] || { warn "Cancelled."; pause_menu; return; }; service_action stop "$SELECTED" >/dev/null 2>&1 || true; if systemd_available; then $SUDO systemctl disable "$(service_name "$SELECTED").service" >/dev/null 2>&1 || true; $SUDO rm -f "/etc/systemd/system/$(service_name "$SELECTED").service"; $SUDO systemctl daemon-reload; fi; command_ready pm2 && pm2 delete "$SELECTED" >/dev/null 2>&1 || true; rm -rf -- "$ROOT/$SELECTED"; ok "Bot removed."; pause_menu; }
-status(){ header; printf '%bHOST RUNTIME%b\n' "$CYAN" "$RESET"; printf 'Python: %s\n' "$(python3 --version 2>/dev/null || echo unavailable)"; printf 'LXD API: %s\n' "$(python3 -c 'from pylxd import Client; Client().host_info(); print("READY")' 2>/dev/null || echo unavailable)"; printf 'systemd: %s\n' "$(systemd_available && echo yes || echo no)"; printf 'Public IP: %s\n\n' "$(detect_host || echo unavailable)"; pause_menu; }
-self_check(){ header; printf '%bSNCK SELF CHECK%b\n\n' "$CYAN" "$RESET"; local failures=0; command_ready curl || { fail "curl missing"; failures=$((failures+1)); }; command_ready python3 || { fail "python3 missing"; failures=$((failures+1)); }; python3 -m venv --help >/dev/null 2>&1 || { fail "python3-venv unavailable"; failures=$((failures+1)); }; if python3 -c 'from pylxd import Client; Client().host_info()' >/dev/null 2>&1; then ok "Python LXD API is usable"; else warn "LXD unavailable here; bot-only mode is supported."; fi; [[ "$failures" -eq 0 ]] && ok "Base prerequisites passed." || warn "$failures base prerequisite(s) failed."; pause_menu; }
+status(){
+  header
+  printf '%bHOST RUNTIME%b\n' "$CYAN" "$RESET"; printf 'Python: %s\n' "$(python3 --version 2>/dev/null || echo unavailable)"; if python3 -c 'from pylxd import Client; Client().host_info' >/tmp/cjh-lxd-status.log 2>&1; then
+    printf 'LXD API: READY\n'
+  else
+    printf 'LXD API: NOT READY\n'
+    tail -20 /tmp/cjh-lxd-status.log 2>/dev/null || true
+  fi; printf 'systemd: %s\n' "$(systemd_available && echo yes || echo no)"; printf 'Public IP: %s\n\n' "$(detect_host || echo unavailable)"; pause_menu; }
+self_check(){ header; printf '%bSNCK SELF CHECK%b\n\n' "$CYAN" "$RESET"; local failures=0; command_ready curl || { fail "curl missing"; failures=$((failures+1)); }; command_ready python3 || { fail "python3 missing"; failures=$((failures+1)); }; python3 -m venv --help >/dev/null 2>&1 || { fail "python3-venv unavailable"; failures=$((failures+1)); }; if python3 -c 'from pylxd import Client; c=Client(); c.host_info; c.storage_pools.all(); c.networks.all(); c.profiles.get("default")' >/dev/null 2>&1; then
+    ok "Python LXD API, storage, network, and default profile are usable"
+  else
+    warn "LXD unavailable here; bot-only mode is supported."
+  fi; [[ "$failures" -eq 0 ]] && ok "Base prerequisites passed." || warn "$failures base prerequisite(s) failed."; pause_menu; }
 menu(){ header; printf '%b  01%b  Install / Create Bot + LXD VPS Node\n' "$CYAN" "$RESET"; printf '%b  02%b  Start Bot\n' "$GREEN" "$RESET"; printf '%b  03%b  Stop Bot\n' "$YELLOW" "$RESET"; printf '%b  04%b  Restart Bot\n' "$PURPLE" "$RESET"; printf '%b  05%b  Live Logs\n' "$PINK" "$RESET"; printf '%b  06%b  Update Bot\n' "$CYAN" "$RESET"; printf '%b  07%b  Remove Bot\n' "$RED" "$RESET"; printf '%b  08%b  System / LXD / Service Status\n' "$WHITE" "$RESET"; printf '%b  09%b  Full Self Check\n' "$GREEN" "$RESET"; printf '%b  Q %b Quit\n\n' "$DIM" "$RESET"; printf '%bSelect > %b' "$WHITE" "$CYAN"; read -r choice; case "$choice" in 1|01) create_bot;; 2|02) manage START;; 3|03) manage STOP;; 4|04) manage RESTART;; 5|05) manage LOGS;; 6|06) update_bot;; 7|07) remove_bot;; 8|08) status;; 9|09) self_check;; q|Q) exit 0;; *) warn "Invalid option."; sleep 1;; esac; }
 trap 'rc=$?; ((rc!=0)) && fail "Installer stopped with exit code $rc"' ERR
 printf '%b%s Bot Hosting v%s%b\n' "$PURPLE" "$BRAND" "$VERSION" "$RESET"; printf '%bInitializing control center...%b\n' "$DIM" "$RESET"; setup_runtime || { fail "Runtime setup failed."; printf '%bSee:%b /tmp/cjh-apt-update.log /tmp/cjh-apt-install.log /tmp/cjh-lxc-*.log\n' "$DIM" "$RESET"; exit 1; }; while :; do menu; done
