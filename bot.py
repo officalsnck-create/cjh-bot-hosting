@@ -198,7 +198,7 @@ def next_port(client=None):
                 if device.get("type") != "proxy":
                     continue
                 listen = str(device.get("listen", ""))
-                match = re.search(r"tcp:[^:]+:(\\d+)$", listen)
+                match = re.search(r"tcp:[^:]+:(\d+)$", listen)
                 if match:
                     used.add(int(match.group(1)))
     except Exception as exc:
@@ -284,7 +284,7 @@ def configure_instance(instance, port):
     # cloud-init is supported by official Ubuntu images. The ssh-keys extension
     # is preferred for the key itself; user-data handles openssh-server.
     config["cloud-init.ssh-keys.snck"] = f"root:{SSH_PUBLIC_KEY}"
-    config["cloud-init.user-data"] = "\\n".join(
+    config["cloud-init.user-data"] = "\n".join(
         [
             "#cloud-config",
             "package_update: true",
@@ -465,9 +465,26 @@ def _create_instance(owner):
                     "server": "https://cloud-images.ubuntu.com/releases",
                 },
             },
-            wait=True,
+            wait=False,
         )
         created_by_us = True
+
+        # Do not use pylxd's wait=True path here. Some LXD 5.21 operation
+        # responses omit resources, which can make pylxd raise
+        # "'NoneType' object is not subscriptable" after LXD actually creates
+        # the instance. Poll the named instance instead.
+        deadline = datetime.now(timezone.utc) + timedelta(seconds=180)
+        while datetime.now(timezone.utc) < deadline:
+            try:
+                instance = client.instances.get(name)
+                break
+            except Exception:
+                import time
+                time.sleep(2)
+        else:
+            raise RuntimeError(
+                f"LXD created operation did not expose instance {name} within 180 seconds."
+            )
 
         configure_instance(instance, port)
         instance.start(wait=True)
@@ -585,11 +602,6 @@ def create_instance(owner):
                 pass
         raise
 
-
-def create_instance(owner):
-    # Serialize deployment requests so name/port allocation cannot race.
-    with DEPLOY_LOCK:
-        return _create_instance(owner)
 
 
 @bot.event
